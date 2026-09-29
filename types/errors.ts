@@ -89,11 +89,15 @@ export class ApiClientError extends Error {
   static fromAxiosError(error: {
     code?: string;
     message?: string;
-    response?: { status?: number; data?: { message?: string } };
+    response?: { status?: number; data?: unknown };
     request?: unknown;
   }): ApiClientError {
     const statusCode = error.response?.status ?? 0;
-    const serverMsg = error.response?.data?.message;
+    const data = error.response?.data;
+    const serverMsg =
+      data && typeof data === 'object' && 'message' in data
+        ? ((data as { message?: unknown }).message as string | undefined)
+        : undefined;
 
     // Request timeout (axios code ECONNABORTED)
     if (error.code === 'ECONNABORTED') {
@@ -141,13 +145,11 @@ export class ApiClientError extends Error {
   }
 }
 
-function userFacingMessage(
-  code: ApiErrorCode,
-  statusCode: number,
-  serverMsg?: string,
-): string {
-  // Prefer the server's message for 4xx since it may contain validation details
-  if (statusCode >= 400 && statusCode < 500 && serverMsg) {
+function userFacingMessage(code: ApiErrorCode, statusCode: number, serverMsg?: string): string {
+  // Prefer the server's message for 4xx (validation details), except 401 –
+  // an expired/invalid session should always point the user at re-authentication
+  // rather than surfacing a raw "Unauthorized" from the API.
+  if (statusCode >= 400 && statusCode < 500 && statusCode !== 401 && serverMsg) {
     return serverMsg;
   }
 

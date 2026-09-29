@@ -159,21 +159,7 @@ api.interceptors.response.use(
     const status = axiosError.response?.status;
     const method = original?.method?.toLowerCase();
 
-    // 2. Capture non-401 production exceptions to Sentry
-    if (status !== 401) {
-      captureServiceError('api', 'response', axiosError);
-      addBreadcrumb(
-        'http.error',
-        `HTTP ${status ?? 'network'} error`,
-        {
-          url: original?.url ?? 'unknown',
-          status: status ?? 0,
-        },
-        'error'
-      );
-    }
-
-    // 3. Token refresh – 401 handling
+    // 2. Token refresh – 401 handling
     if (status === 401 && original && !original._retry) {
       original._retry = true;
 

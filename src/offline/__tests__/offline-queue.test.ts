@@ -149,7 +149,7 @@ describe('Offline queue idempotency keys', () => {
           headers: expect.objectContaining({
             'Idempotency-Key': action.idempotencyKey,
           }),
-        }),
+        })
       );
     });
   });

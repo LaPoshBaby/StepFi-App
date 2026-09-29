@@ -51,9 +51,7 @@ jest.mock('../../src/offline/offline-queue', () => ({
   getQueue: jest.fn().mockResolvedValue([]),
   dequeueAction: jest.fn().mockResolvedValue(undefined),
   clearQueue: jest.fn().mockResolvedValue(undefined),
-  getQueueLength: jest
-    .fn()
-    .mockResolvedValue(0),
+  getQueueLength: jest.fn().mockResolvedValue(0),
 }));
 
 jest.mock('../../services/sentry', () => ({
@@ -123,18 +121,22 @@ describe('API Client – resilience layer', () => {
         },
       });
 
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
+      const api = await importApi();
+      // Drive the request through the instance adapter so the response
+      // interceptor (refresh + retry) actually runs. Spying on
+      // Axios.prototype.request would bypass the interceptor chain.
+      api.defaults.adapter = async (cfg: any) => {
         callCount++;
         if (callCount === 1) {
           const err: any = new Error('Unauthorized');
           err.response = { status: 401, data: { message: 'Token expired' } };
           err.config = cfg;
+          err.isAxiosError = true;
           throw err;
         }
-        return { data: { success: true }, status: 200, config: cfg };
-      });
+        return { data: { success: true }, status: 200, statusText: 'OK', headers: {}, config: cfg };
+      };
 
-      const api = await importApi();
       const result = await api.get('/protected-resource');
 
       expect(refreshSpy).toHaveBeenCalledTimes(1);
@@ -147,15 +149,15 @@ describe('API Client – resilience layer', () => {
       const realAxios = require('axios');
       jest.spyOn(realAxios, 'post').mockRejectedValueOnce(new Error('Refresh failed'));
 
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
+      const { ApiClientError, ApiErrorCode } = await import('../../types/errors');
+      const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => {
         const err: any = new Error('Unauthorized');
         err.response = { status: 401, data: { message: 'Token expired' } };
         err.config = cfg;
+        err.isAxiosError = true;
         throw err;
-      });
-
-      const { ApiClientError, ApiErrorCode } = await import('../../types/errors');
-      const api = await importApi();
+      };
 
       try {
         await api.get('/protected-resource');
@@ -180,18 +182,18 @@ describe('API Client – resilience layer', () => {
       });
 
       let callCount = 0;
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
+      const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => {
         callCount++;
         if (callCount <= 2) {
           const err: any = new Error('Unauthorized');
           err.response = { status: 401, data: { message: 'Token expired' } };
           err.config = cfg;
+          err.isAxiosError = true;
           throw err;
         }
-        return { data: { success: true }, status: 200, config: cfg };
-      });
-
-      const api = await importApi();
+        return { data: { success: true }, status: 200, statusText: 'OK', headers: {}, config: cfg };
+      };
 
       const [result1, result2] = await Promise.allSettled([
         api.get('/resource-1'),
@@ -212,19 +214,23 @@ describe('API Client – resilience layer', () => {
 
   describe('exponential backoff with jitter for transient errors', () => {
     it('retries GET requests up to MAX_RETRIES times on server errors', async () => {
-      const realAxios = require('axios');
+      // Collapse the exponential back-off so the retry loop runs instantly.
+      jest.spyOn(global, 'setTimeout').mockImplementation((cb: any) => {
+        cb();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
 
       let attempt = 0;
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
+      const { ApiClientError, ApiErrorCode } = await import('../../types/errors');
+      const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => {
         attempt++;
         const err: any = new Error('Server Error');
         err.response = { status: 500, data: { message: 'Internal error' } };
-        err.config = { ...cfg, _retryCount: attempt };
+        err.config = cfg;
+        err.isAxiosError = true;
         throw err;
-      });
-
-      const { ApiClientError, ApiErrorCode } = await import('../../types/errors');
-      const api = await importApi();
+      };
 
       try {
         await api.get('/flaky-resource');
@@ -239,18 +245,16 @@ describe('API Client – resilience layer', () => {
     });
 
     it('does not retry POST requests on transient errors (non-idempotent)', async () => {
-      const realAxios = require('axios');
-
       let attempt = 0;
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
+      const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => {
         attempt++;
         const err: any = new Error('Server Error');
         err.response = { status: 500, data: { message: 'Internal error' } };
         err.config = cfg;
+        err.isAxiosError = true;
         throw err;
-      });
-
-      const api = await importApi();
+      };
 
       try {
         await api.post('/mutation', { foo: 'bar' });
@@ -292,14 +296,15 @@ describe('API Client – resilience layer', () => {
     it('still allows GET requests through when offline (no queue)', async () => {
       mockConnectivityState.mockReturnValue(mockDisconnectedState());
 
-      const realAxios = require('axios');
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockResolvedValue({
+      const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => ({
         data: { loans: [] },
         status: 200,
-        config: { url: '/loans' },
+        statusText: 'OK',
+        headers: {},
+        config: cfg,
       });
 
-      const api = await importApi();
       const result = await api.get('/loans');
 
       // GETs are not intercepted by the offline check – pass through
@@ -313,16 +318,22 @@ describe('API Client – resilience layer', () => {
 
   describe('request timeout handling', () => {
     it('wraps timeout errors in ApiClientError with TIMEOUT code', async () => {
-      const realAxios = require('axios');
-      jest.spyOn(realAxios.Axios.prototype, 'request').mockImplementation(async (cfg: any) => {
-        const err: any = new Error('timeout of 15000ms exceeded');
-        err.code = 'ECONNABORTED';
-        err.config = cfg;
-        throw err;
+      // A timeout looks like a transient error, so it flows through the retry
+      // loop first – collapse the back-off delays so the test runs instantly.
+      jest.spyOn(global, 'setTimeout').mockImplementation((cb: any) => {
+        cb();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
       });
 
       const { ApiClientError, ApiErrorCode } = await import('../../types/errors');
       const api = await importApi();
+      api.defaults.adapter = async (cfg: any) => {
+        const err: any = new Error('timeout of 15000ms exceeded');
+        err.code = 'ECONNABORTED';
+        err.config = cfg;
+        err.isAxiosError = true;
+        throw err;
+      };
 
       try {
         await api.get('/slow-endpoint');
@@ -370,21 +381,11 @@ describe('API Client – resilience layer', () => {
     it('ApiClientError.isRetryable is true for network, server, and timeout errors', () => {
       const { ApiClientError, ApiErrorCode } = require('../../types/errors');
 
-      expect(
-        new ApiClientError({ code: ApiErrorCode.NETWORK_ERROR }).isRetryable,
-      ).toBe(true);
-      expect(
-        new ApiClientError({ code: ApiErrorCode.SERVER_ERROR }).isRetryable,
-      ).toBe(true);
-      expect(
-        new ApiClientError({ code: ApiErrorCode.TIMEOUT }).isRetryable,
-      ).toBe(true);
-      expect(
-        new ApiClientError({ code: ApiErrorCode.UNAUTHORIZED }).isRetryable,
-      ).toBe(false);
-      expect(
-        new ApiClientError({ code: ApiErrorCode.CLIENT_ERROR }).isRetryable,
-      ).toBe(false);
+      expect(new ApiClientError({ code: ApiErrorCode.NETWORK_ERROR }).isRetryable).toBe(true);
+      expect(new ApiClientError({ code: ApiErrorCode.SERVER_ERROR }).isRetryable).toBe(true);
+      expect(new ApiClientError({ code: ApiErrorCode.TIMEOUT }).isRetryable).toBe(true);
+      expect(new ApiClientError({ code: ApiErrorCode.UNAUTHORIZED }).isRetryable).toBe(false);
+      expect(new ApiClientError({ code: ApiErrorCode.CLIENT_ERROR }).isRetryable).toBe(false);
     });
   });
 });
