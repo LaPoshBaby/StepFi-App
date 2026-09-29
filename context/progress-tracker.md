@@ -4,6 +4,16 @@ Update this file after every completed screen, component, hook, or architectural
 
 ---
 
+## 2026-09-28 - Development resumed
+
+StepFi-App is active again. The July pause was pending an automated verification workflow;
+that gate now exists. CI runs a **blocking** `Lint / Typecheck / Test` job alongside
+`npx expo export --platform web`, and it is a **required status check on `main`** — no PR
+merges unless lint, `tsc --noEmit`, the test suite, and the web export all pass. That
+enforced gate is the verification workflow, so active issue work and review have resumed.
+
+---
+
 ## Current Phase
 
 **Phase 2 — Wallet Integration**

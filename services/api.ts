@@ -115,11 +115,7 @@ async function performRefresh(): Promise<string | null> {
       accessToken: string;
       refreshToken: string;
       expiresIn: number;
-    }>(
-      `${config.API_BASE_URL}/auth/refresh`,
-      { refreshToken },
-      { timeout: REQUEST_TIMEOUT_MS },
-    );
+    }>(`${config.API_BASE_URL}/auth/refresh`, { refreshToken }, { timeout: REQUEST_TIMEOUT_MS });
     await setTokens(res.data.accessToken, res.data.refreshToken);
     return res.data.accessToken;
   } catch {
@@ -163,7 +159,21 @@ api.interceptors.response.use(
     const status = axiosError.response?.status;
     const method = original?.method?.toLowerCase();
 
-    // 2. Token refresh – 401 handling
+    // 2. Capture non-401 production exceptions to Sentry
+    if (status !== 401) {
+      captureServiceError('api', 'response', axiosError);
+      addBreadcrumb(
+        'http.error',
+        `HTTP ${status ?? 'network'} error`,
+        {
+          url: original?.url ?? 'unknown',
+          status: status ?? 0,
+        },
+        'error'
+      );
+    }
+
+    // 3. Token refresh – 401 handling
     if (status === 401 && original && !original._retry) {
       original._retry = true;
 
@@ -185,7 +195,7 @@ api.interceptors.response.use(
             message: 'Session expired – refresh failed',
             userMessage: 'Your session has expired. Please sign in again.',
             cause: axiosError,
-          }),
+          })
         );
       }
 
@@ -224,7 +234,7 @@ api.interceptors.response.use(
         'http.error',
         `HTTP ${status ?? 'network'} error`,
         { url: original?.url ?? 'unknown', status: status ?? 0 },
-        'error',
+        'error'
       );
     }
 
@@ -244,7 +254,7 @@ api.interceptors.response.use(
 
     // 6. Wrap into typed ApiClientError before rejecting
     return Promise.reject(ApiClientError.fromAxiosError(axiosError));
-  },
+  }
 );
 
 // ---------------------------------------------------------------------------

@@ -39,7 +39,7 @@ function generateId(): string {
  * provides a secondary dimension for observability / debugging.
  */
 async function generateIdempotencyKey(
-  action: Omit<QueueAction, 'id' | 'timestamp' | 'idempotencyKey'>,
+  action: Omit<QueueAction, 'id' | 'timestamp' | 'idempotencyKey'>
 ): Promise<string> {
   const payload = `${action.type}:${action.endpoint}:${JSON.stringify(action.data)}`;
   const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
@@ -56,7 +56,7 @@ export async function getQueue(): Promise<QueueAction[]> {
 }
 
 export async function enqueueAction(
-  action: Omit<QueueAction, 'id' | 'timestamp' | 'idempotencyKey'>,
+  action: Omit<QueueAction, 'id' | 'timestamp' | 'idempotencyKey'>
 ): Promise<QueueAction> {
   const queue = await getQueue();
   const newAction: QueueAction = {
